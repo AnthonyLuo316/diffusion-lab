@@ -240,13 +240,14 @@ class SuperResolutionOperator(LinearOperator):
 
 def dps_sample(
     ddpm,
-    y:          Tensor,
-    operator_A: LinearOperator,
-    zeta:       float = 1.0,
-    device:     str | torch.device = "cpu",
+    y:            Tensor,
+    operator_A:   LinearOperator,
+    zeta:         float = 1.0,
+    device:       str | torch.device = "cpu",
+    sample_shape: tuple | None = None,
     return_chain: bool = False,
     chain_stride: int = 100,
-    verbose:    bool = False,
+    verbose:      bool = False,
 ) -> Tensor | list[Tensor]:
     """
     Diffusion Posterior Sampling (DPS) — Chung et al. 2022.
@@ -260,14 +261,20 @@ def dps_sample(
 
     Parameters
     ----------
-    ddpm       : trained DDPM model (must expose .network, .schedule, .prediction)
-    y          : (B, C, H, W) measurement tensor on `device`
-    operator_A : forward operator A (must be differentiable w.r.t. x₀)
-    zeta       : step-size for the likelihood gradient (default 1.0)
-    device     : target device
-    return_chain: if True, return list of intermediate snapshots
-    chain_stride: snapshot every this many reverse steps
-    verbose    : print progress every 100 steps
+    ddpm         : trained DDPM model (must expose .network, .schedule, .prediction)
+    y            : (B, ...) measurement tensor on `device`.  The shape of y is
+                   used to determine the sample shape unless ``sample_shape`` is
+                   given explicitly.
+    operator_A   : forward operator A (must be differentiable w.r.t. x₀)
+    zeta         : step-size for the likelihood gradient (default 1.0)
+    device       : target device
+    sample_shape : explicit ``(B, C, H, W)`` for the latent image.  Required
+                   when measurement and image spaces differ, e.g. super-resolution
+                   where y has shape (B, 1, 7, 7) but x₀ should be (B, 1, 28, 28).
+                   If ``None`` (default), inferred from ``y.shape``.
+    return_chain : if True, return list of intermediate snapshots
+    chain_stride : snapshot every this many reverse steps
+    verbose      : print progress every 100 steps
 
     Returns
     -------
@@ -284,7 +291,10 @@ def dps_sample(
     device   = torch.device(device)
     sched    = ddpm.schedule
     T        = sched.T
-    B, C, H, W = y.shape
+    if sample_shape is not None:
+        B, C, H, W = sample_shape
+    else:
+        B, C, H, W = y.shape
     y        = y.to(device)
 
     x     = torch.randn(B, C, H, W, device=device)

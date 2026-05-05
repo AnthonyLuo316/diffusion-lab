@@ -2,8 +2,8 @@
 diffusion_lab/training/trainer.py
 Generic Trainer for all diffusion-lab models.
 
-Usage
------
+Usage — step-based (unconditional models)
+------------------------------------------
     trainer = Trainer(
         model   = ddpm,
         loader  = get_dataloader("spiral", batch_size=256),
@@ -15,6 +15,20 @@ Usage
         callback_every= 2_000,
         callback      = lambda tr, step: plot_samples(tr.generate(256)),
     )
+
+Usage — epoch-based (conditional models with label_fn)
+-------------------------------------------------------
+    def label_fn(batch):
+        _, y = batch
+        return (y + 1).to(device)   # digit d → class index d+1
+
+    trainer = Trainer(model=cond_ddpm, loader=train_loader, lr=3e-4, device=device)
+    losses  = trainer.train_epochs(
+        n_epochs  = 30,
+        label_fn  = label_fn,
+        log_every_epoch = 5,
+    )
+    trainer.save("checkpoints/cond_ddpm.pt")
 """
 
 from __future__ import annotations
@@ -113,6 +127,7 @@ class Trainer:
     def train(
         self,
         n_steps: int,
+        label_fn: Callable[..., Any] | None = None,
         callback_every: int = 1000,
         callback: Callable[["Trainer", int], None] | None = None,
         log_every: int = 100,
@@ -123,13 +138,21 @@ class Trainer:
         Parameters
         ----------
         n_steps       : total gradient steps to perform
-        callback_every: call `callback(trainer, step)` every this many steps
+        label_fn      : optional callable ``(batch) -> labels``.  When provided,
+                        the trainer calls ``model.loss(x0, labels)`` instead of
+                        ``model.loss(x0)``.  Useful for conditional models such
+                        as ``CondDDPM`` that require per-batch class labels.
+                        Example::
+
+                            label_fn = lambda batch: (batch[1] + 1).to(device)
+
+        callback_every: call ``callback(trainer, step)`` every this many steps
         callback      : optional callable for visualization / logging
         log_every     : print average loss every this many steps
 
         Returns
         -------
-        losses : list of per-step scalar losses
+        losses : list of per-step scalar losses (appended to self.train_losses)
         """
         self.model.train() if hasattr(self.model, "train") else None
 
@@ -147,7 +170,11 @@ class Trainer:
             x0 = x0.to(self.device)
 
             self.optimizer.zero_grad()
-            loss = self.model.loss(x0)
+            if label_fn is not None:
+                labels = label_fn(batch)
+                loss = self.model.loss(x0, labels)
+            else:
+                loss = self.model.loss(x0)
             loss.backward()
 
             if self.grad_clip is not None:
@@ -174,6 +201,96 @@ class Trainer:
 
         pbar.close()
         return self.train_losses
+
+    def train_epochs(
+        self,
+        n_epochs: int,
+        label_fn: Callable[..., Any] | None = None,
+        lr_schedule: str = "cosine",
+        log_every_epoch: int = 1,
+        callback_every: int = 0,
+        callback: Callable[["Trainer", int], None] | None = None,
+    ) -> list[float]:
+        """
+        Train for ``n_epochs`` complete passes through the DataLoader.
+
+        This is the recommended entry-point for epoch-based training workflows
+        (e.g. MNIST experiments where the full dataset fits in a few hundred
+        batches).  Unlike ``train()``, it handles epoch-level cosine LR
+        annealing internally and logs at the epoch granularity.
+
+        Parameters
+        ----------
+        n_epochs        : number of full passes through ``self.loader``
+        label_fn        : same semantics as in ``train()`` — callable
+                          ``(batch) -> labels`` for conditional models
+        lr_schedule     : ``'cosine'`` (CosineAnnealingLR over ``n_epochs``)
+                          or ``'constant'`` (no LR decay)
+        log_every_epoch : print epoch-average loss every this many epochs
+                          (0 = silent)
+        callback_every  : call ``callback(trainer, epoch)`` every this many
+                          epochs (0 = never)
+        callback        : optional callable invoked in eval mode
+
+        Returns
+        -------
+        losses : flat list of per-step losses across all epochs
+                 (also appended to self.train_losses)
+        """
+        from torch.optim.lr_scheduler import CosineAnnealingLR
+
+        if lr_schedule == "cosine":
+            lr_sched = CosineAnnealingLR(self.optimizer, T_max=n_epochs)
+        else:
+            lr_sched = None
+
+        epoch_losses: list[float] = []
+
+        for epoch in range(1, n_epochs + 1):
+            self.model.train() if hasattr(self.model, "train") else None
+            running: list[float] = []
+
+            for batch in self.loader:
+                if isinstance(batch, (list, tuple)):
+                    x0 = batch[0]
+                else:
+                    x0 = batch
+                x0 = x0.to(self.device)
+
+                self.optimizer.zero_grad()
+                if label_fn is not None:
+                    labels = label_fn(batch)
+                    loss = self.model.loss(x0, labels)
+                else:
+                    loss = self.model.loss(x0)
+                loss.backward()
+
+                if self.grad_clip is not None:
+                    params = self._collect_params(self.model)
+                    nn.utils.clip_grad_norm_(params, self.grad_clip)
+
+                self.optimizer.step()
+                running.append(loss.item())
+                self.steps_done += 1
+
+            if lr_sched is not None:
+                lr_sched.step()
+
+            avg = sum(running) / max(len(running), 1)
+            epoch_losses.extend(running)
+            self.train_losses.extend(running)
+
+            if log_every_epoch > 0 and epoch % log_every_epoch == 0:
+                lr_now = self.optimizer.param_groups[0]["lr"]
+                print(f"Epoch {epoch:4d}/{n_epochs}  loss = {avg:.4f}  "
+                      f"lr = {lr_now:.2e}")
+
+            if callback is not None and callback_every > 0 and epoch % callback_every == 0:
+                self.model.eval() if hasattr(self.model, "eval") else None
+                callback(self, epoch)
+                self.model.train() if hasattr(self.model, "train") else None
+
+        return epoch_losses
 
     # ------------------------------------------------------------------
     # Checkpointing

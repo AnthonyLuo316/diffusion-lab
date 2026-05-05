@@ -4,6 +4,8 @@ A modular PyTorch reference implementation of generative diffusion model framewo
 written as the companion codebase to the lecture notes
 *Understanding Theories of Diffusion Models*.
 
+> **Lecture notes**: [`docs/quickguide.pdf`](docs/quickguide.pdf)
+
 The library covers VAE, DDPM/DDIM, Score SDE (NCSN/VE-SDE), Flow Matching (CFM),
 Classifier-Free Guidance (CFG), EDM preconditioning, inverse problems (DPS),
 and the unifying probability-flow ODE perspective.
