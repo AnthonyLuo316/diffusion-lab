@@ -1,10 +1,10 @@
 # diffusion-lab
 
 A modular PyTorch reference implementation of generative diffusion model frameworks,
-written as the companion codebase to the lecture notes
+written as the companion codebase to the tutorial notes
 *Understanding Theories of Diffusion Models*.
 
-> **Lecture notes**: [`docs/quickguide.pdf`](docs/quickguide.pdf)
+> **Tutorial notes**: [`docs/quickguide.pdf`](docs/quickguide.pdf)
 
 The library covers VAE, DDPM/DDIM, Score SDE (NCSN/VE-SDE), Flow Matching (CFM),
 Classifier-Free Guidance (CFG), EDM preconditioning, inverse problems (DPS),
